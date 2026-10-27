@@ -1,0 +1,249 @@
+"""
+عملية التحليل الهرمي (AHP) – محاكاة تفاعلية
+Python (Streamlit) version of the AHP transport simulation.
+
+Run:
+    pip install streamlit
+    streamlit run ahp_simulation.py
+"""
+import streamlit as st
+
+# ----------------------------------------------------------------------------
+# Content
+# ----------------------------------------------------------------------------
+C = ["البيئي: خفض الانبعاثات", "الاقتصادي: التكلفة", "الاجتماعي: سهولة الوصول"]  # criteria (long)
+CS = ["البيئي", "الاقتصادي", "الاجتماعي"]                                        # criteria (short)
+AL = ["حافلات كهربائية", "سيارات هجينة", "مسارات المشي والدراجات"]               # alternatives
+PR = [(0, 1), (0, 2), (1, 2)]          # the three pairs compared in every 3×3 matrix
+RI = {1: 0.0, 2: 0.0, 3: 0.58}         # Saaty random index
+STEPS = 7
+VB = {2: "قيمة وسطية", 3: "أفضلية متوسطة", 4: "قيمة وسطية", 5: "أفضلية قوية",
+      6: "قيمة وسطية", 7: "أفضلية قوية جدًا", 8: "قيمة وسطية", 9: "أفضلية مطلقة"}
+
+
+# ----------------------------------------------------------------------------
+# AHP maths
+# ----------------------------------------------------------------------------
+def g(x: int) -> float:
+    """Slider position (-8..8) -> Saaty value: 0->1, +k -> k+1, -k -> 1/(k+1)."""
+    return x + 1 if x >= 0 else 1 / (1 - x)
+
+
+def matrix(v):
+    """Build a reciprocal 3×3 matrix from the three pairwise judgements."""
+    a, b, c = g(v[0]), g(v[1]), g(v[2])
+    return [[1, a, b], [1 / a, 1, c], [1 / b, 1 / c, 1]]
+
+
+def weights(A):
+    """Approximate eigenvector (normalise columns, average rows) + consistency ratio."""
+    n = len(A)
+    col = [sum(A[i][j] for i in range(n)) for j in range(n)]
+    w = [sum(A[i][j] / col[j] for j in range(n)) / n for i in range(n)]
+    lam = sum(sum(A[i][j] * w[j] for j in range(n)) / w[i] for i in range(n)) / n
+    ci = (lam - n) / (n - 1)
+    cr = ci / RI[n] if RI[n] else 0.0
+    return w, cr
+
+
+def results(P):
+    cw, ccr = weights(matrix(P["c"]))
+    alts = [weights(matrix(v)) for v in P["a"]]
+    scores = [sum(cw[i] * alts[i][0][k] for i in range(3)) for k in range(3)]
+    return cw, ccr, alts, scores
+
+
+def default_state():
+    # all sliders start in the middle (equal importance)
+    return {"c": [0, 0, 0], "a": [[0, 0, 0], [0, 0, 0], [0, 0, 0]]}
+
+
+# ----------------------------------------------------------------------------
+# Page setup and RTL styling
+# ----------------------------------------------------------------------------
+st.set_page_config(page_title="عملية التحليل الهرمي (AHP)", layout="centered")
+st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+html, body, [class*="css"], .stApp, .stMarkdown, p, h1, h2, h3, div, span, label, button {
+  font-family: Tajawal, Tahoma, sans-serif !important; }
+.stApp { direction: rtl; text-align: right; background: #FFF6E6; color: #1F4A47; }
+.ctr { text-align: center; }
+.k { color: #C2410C; font-weight: 800; }
+.bx { background:#FFEDD1; border-radius:14px; padding:10px 16px; margin:10px 0; text-align:center; font-weight:700; }
+.cr { padding:10px 14px; border-radius:12px; font-weight:700; margin:12px 0; text-align:center; color:#1F4A47; }
+.ok { background:#BCDDDC; } .bad { background:#FDC1B4; }
+.best { background:linear-gradient(270deg,#72B0AB,#FE9179); border-radius:14px; padding:12px 16px;
+        font-weight:800; font-size:20px; text-align:center; color:#1F4A47; }
+.pg { display:flex; flex-direction:row; direction:rtl; gap:4px; margin:4px 0 16px; }
+.pg i { flex:1; height:8px; border-radius:4px; background:#BCDDDC; opacity:.5; }
+.pg i.d { background:#72B0AB; opacity:1; } .pg i.c { background:#FE9179; opacity:1; }
+.sc { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; text-align:center; font-size:14px; margin:8px 0; }
+.sc div { background:#BCDDDC; border-radius:10px; padding:4px 2px; line-height:1.4; }
+.sc b { display:block; font-size:18px; }
+.lb { display:flex; justify-content:space-between; font-weight:700; }
+.ex { text-align:center; min-height:30px; }
+.bar { display:flex; align-items:center; gap:8px; margin:6px 0; }
+.bar span { min-width:110px; } .bar div { height:20px; border-radius:10px;
+  background:linear-gradient(270deg,#72B0AB,#FE9179); }
+table.t { width:100%; border-collapse:collapse; } table.t td, table.t th { border:1px solid #72B0AB;
+  padding:5px 8px; text-align:center; } table.t th { background:#BCDDDC; }
+.ft { text-align:center; font-weight:700; background:#72B0AB; color:#1F4A47; padding:10px; border-radius:12px; margin-top:24px; }
+/* keep the slider itself left-to-right so its numeric logic stays simple */
+div[data-baseweb="slider"] { direction:ltr; }
+</style>
+""", unsafe_allow_html=True)
+
+if "P" not in st.session_state:
+    st.session_state.P = default_state()
+if "s" not in st.session_state:
+    st.session_state.s = 1
+P = st.session_state.P
+
+
+def go(n):
+    st.session_state.s = max(1, min(STEPS, n))
+
+
+def reset():
+    st.session_state.P = default_state()
+    for key in list(st.session_state.keys()):
+        if key.startswith("r_"):
+            del st.session_state[key]
+    st.session_state.s = 1
+
+
+# ----------------------------------------------------------------------------
+# UI helpers
+# ----------------------------------------------------------------------------
+def explain(v, A, B):
+    if v == 0:
+        return f'<span class="k">{A}</span> و<span class="k">{B}</span> متساويان في الأهمية (1)'
+    d = abs(v) + 1
+    w, l = (A, B) if v > 0 else (B, A)
+    return f'<span class="k">{w}</span> أفضل من <span class="k">{l}</span> بدرجة {d} ({VB[d]})'
+
+
+def pair_slider(key, A, B, value):
+    """RTL layout: A on the right, B on the left. Moving the handle toward A favours A."""
+    st.markdown(f'<div class="lb"><span>{A}</span><span>{B}</span></div>', unsafe_allow_html=True)
+    v = st.slider(f"{A} مقابل {B}", -8, 8, value, 1, key=key, label_visibility="collapsed",
+                  format=" ")
+    st.markdown(f'<div class="ex">{explain(v, A, B)}</div>', unsafe_allow_html=True)
+    return v
+
+
+def cr_box(cr):
+    ok = cr <= 0.10
+    msg = "✔ أحكامك متسقة" if ok else "✘ أحكامك متناقضة، راجعها"
+    st.markdown(f'<div class="cr {"ok" if ok else "bad"}">نسبة الاتساق CR = {cr:.2f} {msg}</div>',
+                unsafe_allow_html=True)
+
+
+def nav(prev=True, nxt=True):
+    # RTL: "previous" on the right, "next" on the left
+    right, _, left = st.columns([1, 3, 1])
+    with right:
+        if prev:
+            st.button("السابق", on_click=go, args=(st.session_state.s - 1,), use_container_width=True)
+    with left:
+        if nxt:
+            st.button("التالي", on_click=go, args=(st.session_state.s + 1,), type="primary",
+                      use_container_width=True)
+
+
+SCALE = ('<div class="sc"><div><b>1</b>متساوية</div><div><b>3</b>متوسطة</div><div><b>5</b>قوية</div>'
+         '<div><b>7</b>قوية جدًا</div><div><b>9</b>مطلقة</div></div>')
+
+# ----------------------------------------------------------------------------
+# Header
+# ----------------------------------------------------------------------------
+s = st.session_state.s
+st.markdown('<h3 class="ctr">عملية التحليل الهرمي (AHP)</h3>'
+            '<p class="ctr"><b>كيف نختار نظام النقل المستدام لمدينتنا؟</b></p>', unsafe_allow_html=True)
+st.markdown('<div class="pg">' + "".join(
+    f'<i class="{"d" if i + 1 < s else "c" if i + 1 == s else ""}"></i>' for i in range(STEPS)) + "</div>",
+    unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------------
+# Steps
+# ----------------------------------------------------------------------------
+if s == 1:
+    st.markdown("## السيناريو")
+    st.markdown("أنت عضو في لجنة تخطيط حضري، وعليك اختيار نظام النقل الأنسب لمدينتك من بين ثلاثة بدائل:")
+    st.markdown(f'<div class="bx">{" • ".join(AL)}</div>', unsafe_allow_html=True)
+    st.markdown("ستقوم بتقييم المعايير ثم البدائل وذلك وفق المقارنات الثنائية، وفي النهاية ستظهر نتيجة التقييم.")
+    _, mid, _ = st.columns([2, 1, 2])
+    with mid:
+        st.button("ابدأ", on_click=go, args=(2,), type="primary", use_container_width=True)
+
+elif s == 2:
+    st.markdown('<h2 class="ctr">هرم القرار</h2>', unsafe_allow_html=True)
+    xs = [550, 330, 110]
+    lines = "".join(f'<line x1="330" y1="60" x2="{x}" y2="130"/>' +
+                    "".join(f'<line x1="{x}" y1="170" x2="{y}" y2="240"/>' for y in xs) for x in xs)
+    crit = "".join(f'<rect x="{[450, 230, 10][i]}" y="130" width="200" height="40" rx="12" fill="#BCDDDC"/>'
+                   f'<text x="{xs[i]}" y="155" text-anchor="middle">{c}</text>' for i, c in enumerate(C))
+    alts = "".join(f'<rect x="{[450, 230, 10][i]}" y="240" width="200" height="40" rx="12" fill="#FE9179"/>'
+                   f'<text x="{xs[i]}" y="265" text-anchor="middle">{a}</text>' for i, a in enumerate(AL))
+    st.markdown(f'''<svg viewBox="0 0 660 300" width="100%" style="font-family:Tajawal,sans-serif;font-size:15px">
+      <g stroke="#72B0AB" stroke-width="2">{lines}</g>
+      <rect x="180" y="20" width="300" height="40" rx="12" fill="#72B0AB"/>
+      <text x="330" y="46" text-anchor="middle" font-weight="700" fill="#1F4A47">الهدف: نظام نقل مستدام</text>
+      <g fill="#1F4A47">{crit}{alts}</g></svg>''', unsafe_allow_html=True)
+    nav()
+
+elif s == 3:
+    st.markdown('<h2 class="ctr">قارن المعايير</h2>'
+                '<p class="ctr">أي المعيارين أهم في نظرك؟ حرّك المؤشر نحوه، والمنتصف يعني التساوي.</p>' + SCALE,
+                unsafe_allow_html=True)
+    for i, (x, y) in enumerate(PR):
+        P["c"][i] = pair_slider(f"r_c{i}", CS[x], CS[y], P["c"][i])
+    cr_box(weights(matrix(P["c"]))[1])
+    nav()
+
+elif s in (4, 5, 6):
+    k = s - 4
+    st.markdown(f'<h2 class="ctr">قارن البدائل وفق المعيار {CS[k]}</h2>'
+                f'<p class="ctr">فكّر في <span class="k">{C[k]}</span> فقط، وحرّك المؤشر نحو البديل الأفضل.</p>',
+                unsafe_allow_html=True)
+    for i, (x, y) in enumerate(PR):
+        P["a"][k][i] = pair_slider(f"r_a{k}{i}", AL[x], AL[y], P["a"][k][i])
+    cr_box(weights(matrix(P["a"][k]))[1])
+    nav()
+
+elif s == 7:
+    cw, ccr, alts, sc = results(P)
+    order = sorted(range(3), key=lambda k: -sc[k])
+    all_cr = [ccr] + [a[1] for a in alts]
+    bad = next((i for i, v in enumerate(all_cr) if v > 0.10), None)
+
+    st.markdown('<h2 class="ctr">النتيجة</h2>', unsafe_allow_html=True)
+    st.markdown(f'<div class="best">البديل الأفضل: {AL[order[0]]} ({sc[order[0]] * 100:.1f}%)</div>',
+                unsafe_allow_html=True)
+
+    st.markdown("### أوزان المعايير")
+    st.markdown("".join(f'<div class="bar"><span>{CS[i]}</span><div style="width:{w * 60}%"></div>'
+                        f'<b>{w * 100:.1f}%</b></div>' for i, w in enumerate(cw)), unsafe_allow_html=True)
+
+    st.markdown("### ترتيب البدائل")
+    rows = "".join(f"<tr><td>{r + 1}</td><td>{AL[k]}</td><td>{sc[k] * 100:.1f}%</td></tr>"
+                   for r, k in enumerate(order))
+    st.markdown(f'<table class="t"><tr><th>الترتيب</th><th>البديل</th><th>الدرجة</th></tr>{rows}</table>',
+                unsafe_allow_html=True)
+
+    if bad is None:
+        st.markdown('<div class="cr ok">✔ جميع أحكامك متسقة (CR ≤ 0.10)</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="cr bad">✘ بعض أحكامك غير متسقة (CR > 0.10)، راجعها قبل اعتماد النتيجة</div>',
+                    unsafe_allow_html=True)
+
+    cols = st.columns(2) if bad is not None else [st.container()]
+    if bad is not None:
+        with cols[0]:
+            # jump straight to the first step that has inconsistent judgements
+            st.button("عدّل أحكامك", on_click=go, args=(bad + 3,), use_container_width=True)
+    with cols[-1]:
+        st.button("ابدأ من جديد", on_click=reset, type="primary", use_container_width=True)
+
+st.markdown('<div class="ft">د. مها محمود الصباغ - جامعة الخليج العربي</div>', unsafe_allow_html=True)
